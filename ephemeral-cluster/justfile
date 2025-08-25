@@ -126,33 +126,35 @@ vcluster-kong:
 
     @just print-subitem "(4/6) Install Kong"
     @KUBECONFIG="vcluster/{{VNAME}}/.kubeconfig" bash -lc ' \
-      helm repo add kong https://charts.konghq.com || true; \
-      helm repo update; \
-      helm upgrade --install kong kong/kong \
-        --namespace {{VKONG}} \
-        --skip-crds --reuse-values \
-        --set image.repository=public.ecr.aws/docker/library/kong \
-        --set image.tag="3.9.1" \
-        --set ingressController.installCRDs=false \
-        --set ingressController.enabled=true \
-        --set ingressController.gateway.enabled=true \
-        --set ingressController.ingressClass=kong \
-        --set deployment.userDefinedVolumes[0].name=stdout-log \
-        --set deployment.userDefinedVolumes[0].configMap.name=kong-plugin-stdout-log \
-        --set deployment.userDefinedVolumes[0].configMap.items[0].key=handler.lua \
-        --set deployment.userDefinedVolumes[0].configMap.items[0].path=kong/plugins/stdout-log/handler.lua \
-        --set deployment.userDefinedVolumes[0].configMap.items[1].key=schema.lua \
-        --set deployment.userDefinedVolumes[0].configMap.items[1].path=kong/plugins/stdout-log/schema.lua \
-        --set deployment.userDefinedVolumeMounts[0].name=stdout-log \
-        --set deployment.userDefinedVolumeMounts[0].mountPath=/opt/kong \
-        --set deployment.userDefinedVolumeMounts[0].readOnly=true \
-        --set-string env.plugins=bundled\\,stdout-log \
-        --set-string env.lua_package_path=/opt/kong/?.lua\;/opt/kong/?/init.lua\;\; \
-        --set env.database=off \
-        --set admin.enabled=false \
-        --set portal.enabled=false \
-        --set proxy.type=ClusterIP \
-        --wait \
+        helm repo add kong https://charts.konghq.com || true; \
+        helm repo update; \
+        helm show crds kong/kong | \
+            kubectl --kubeconfig="vcluster/{{VNAME}}/.kubeconfig" apply -f - ; \
+        helm upgrade --install kong kong/kong \
+            --namespace {{VKONG}} \
+            --skip-crds --reuse-values \
+            --set image.repository=public.ecr.aws/docker/library/kong \
+            --set image.tag="3.9.1" \
+            --set ingressController.installCRDs=false \
+            --set ingressController.enabled=true \
+            --set ingressController.gateway.enabled=true \
+            --set ingressController.ingressClass=kong \
+            --set deployment.userDefinedVolumes[0].name=stdout-log \
+            --set deployment.userDefinedVolumes[0].configMap.name=kong-plugin-stdout-log \
+            --set deployment.userDefinedVolumes[0].configMap.items[0].key=handler.lua \
+            --set deployment.userDefinedVolumes[0].configMap.items[0].path=kong/plugins/stdout-log/handler.lua \
+            --set deployment.userDefinedVolumes[0].configMap.items[1].key=schema.lua \
+            --set deployment.userDefinedVolumes[0].configMap.items[1].path=kong/plugins/stdout-log/schema.lua \
+            --set deployment.userDefinedVolumeMounts[0].name=stdout-log \
+            --set deployment.userDefinedVolumeMounts[0].mountPath=/opt/kong \
+            --set deployment.userDefinedVolumeMounts[0].readOnly=true \
+            --set-string env.plugins=bundled\\,stdout-log \
+            --set-string env.lua_package_path=/opt/kong/?.lua\;/opt/kong/?/init.lua\;\; \
+            --set env.database=off \
+            --set admin.enabled=false \
+            --set portal.enabled=false \
+            --set proxy.type=ClusterIP \
+            --wait \
     ' > /dev/null
 
     @just print-subitem "(5/6) Configure Kong"
@@ -197,7 +199,8 @@ vcluster-dashboard: vcluster-kong
         helm repo add headlamp https://kubernetes-sigs.github.io/headlamp/ || true; \
         helm repo update; \
         helm upgrade --install {{VDASHBOARD}} headlamp/headlamp \
-          --namespace {{VDASHBOARD}} \
+            --namespace {{VDASHBOARD}} \
+            --set-string config.baseURL="/{{VNAME}}/dashboard" \
     ' > /dev/null
 
     @just print-subitem "(3/5) Generate Token ({{EXPIRATION}})"
@@ -221,16 +224,16 @@ vcluster-dashboard: vcluster-kong
         --namespace {{VDASHBOARD}} wait \
         --for=condition=available deploy/{{VDASHBOARD}}-headlamp \
         --timeout=120s > /dev/null
-    @just vcluster-kong-ingres {{VDASHBOARD}} /dashboard {{VDASHBOARD}}-headlamp 80
+    @just vcluster-kong-ingres {{VDASHBOARD}} /{{VNAME}}/dashboard {{VDASHBOARD}}-headlamp 80
     
-    @just print-exec "Execute {{VNAME}} Dashboard" "http://localhost:{{VPORT}}/dashboard"
+    @just print-exec "Execute {{VNAME}} Dashboard" "http://localhost:{{VPORT}}/{{VNAME}}/dashboard/"
 
     @just print-subitem "(5/5) Port Forward"
     @kubectl --kubeconfig="vcluster/{{VNAME}}/.kubeconfig" \
         --namespace {{VDASHBOARD}} port-forward svc/{{VDASHBOARD}}-headlamp 3003:80 \
         > "vcluster/{{VNAME}}/.dashboard.port-forward.log" 2>&1 &
     
-    @just print-exec "Execute {{VNAME}} Dashboard" "http://localhost:3003"
+    @just print-exec "Execute {{VNAME}} Dashboard" "http://localhost:3003/{{VNAME}}/dashboard/"
 
 
 vcluster-full: vcluster-create vcluster-connect vcluster-kong vcluster-dashboard 
