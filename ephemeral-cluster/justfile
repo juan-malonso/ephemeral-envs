@@ -4,7 +4,7 @@ set shell := ["bash", "-eu", "-o", "pipefail", "-c"]
 # --- Variables 
 HOST  := env_var_or_default("HOST", "root-cluster")
 VNAME := env_var_or_default("VNAME", "temporal-cluster")
-VPORT := env_var_or_default("VPORT", "6000")
+VPORT := env_var_or_default("VPORT", "5000")
 
 # ---------------------------------------------------------------------- utils -
 print-seccion MSG:
@@ -62,9 +62,9 @@ vcluster-create:
 
     @just print-subitem "(2/2) Installing VCluster"
     @helm repo add vcluster https://charts.loft.sh > /dev/null 2>&1 || true;
-    @helm upgrade \
+    @helm upgrade "{{VNAME}}" vcluster/vcluster \
       --namespace "vcluster-{{VNAME}}" \
-      --install "{{VNAME}}-cluster" vcluster/vcluster \
+      --install \
       --set controlPlane.proxy.extraSANs[0]=localhost \
       --wait > /dev/null
 
@@ -73,10 +73,11 @@ vcluster-delete:
     @just print-item "Cluster" "{{VNAME}}"
 
     @just print-subitem "(1/2) Uninstalling VCluster"
-    @helm uninstall "{{VNAME}}" --namespace "vcluster-{{VNAME}}" || true
+    @helm uninstall "{{VNAME}}" \
+        --namespace "vcluster-{{VNAME}}" > /dev/null 2>&1 || true
 
     @just print-subitem "(2/2) Deleting Namespace"
-    @kubectl delete ns "{{VNAME}}" || true
+    @kubectl delete ns "vcluster-{{VNAME}}" > /dev/null 2>&1 || true
 
 vcluster-tune:
     @just print-seccion "Tuning Ephemeral Cluster"
@@ -95,15 +96,95 @@ vcluster-connect:
 
     @just print-subitem "(1/1) Creating kubeconfig"
     @mkdir -p vcluster/{{VNAME}}
-    @vcluster connect "{{VNAME}}-cluster" --namespace "vcluster-{{VNAME}}" --print > vcluster/{{VNAME}}/.kubeconfig
+    @vcluster connect "{{VNAME}}" --namespace "vcluster-{{VNAME}}" --print > vcluster/{{VNAME}}/.kubeconfig
     @just print-exec \
         "Usage of the generated kubeconfig" \
         "kubectl --kubeconfig="vcluster/{{VNAME}}/.kubeconfig" get nodes"
 
+VKONG := "vcluster-kong"
+
+vcluster-kong:
+    @just print-seccion "Ephemeral Cluster Kong"
+    @just print-item "Cluster" "{{VNAME}}"
+
+    @just print-subitem "(1/6) Creating Namespace"
+    @kubectl --kubeconfig="vcluster/{{VNAME}}/.kubeconfig" create ns {{VKONG}} --dry-run=client -o yaml | \
+      kubectl --kubeconfig="vcluster/{{VNAME}}/.kubeconfig" apply -f - > /dev/null
+
+    @just print-subitem "(2/6) Install Kong Plugins"
+    @kubectl --kubeconfig="vcluster/{{VNAME}}/.kubeconfig" \
+        --namespace {{VKONG}} create configmap kong-plugin-stdout-log \
+        --from-file=handler.lua=plugins/kong-plugin-stdout-log/handler.lua \
+        --from-file=schema.lua=plugins/kong-plugin-stdout-log/schema.lua \
+        -o yaml --dry-run=client | kubectl --kubeconfig="vcluster/{{VNAME}}/.kubeconfig" apply -f - > /dev/null
+
+    @just print-subitem "(3/6) Install Kong CRDs"
+    @kubectl --kubeconfig="vcluster/{{VNAME}}/.kubeconfig" apply \
+        -f https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.3.0/standard-install.yaml > /dev/null
+    @kubectl --kubeconfig="vcluster/{{VNAME}}/.kubeconfig" wait \
+        --for=condition=Established crd/gatewayclasses.gateway.networking.k8s.io --timeout=60s > /dev/null
+
+    @just print-subitem "(4/6) Install Kong"
+    @KUBECONFIG="vcluster/{{VNAME}}/.kubeconfig" bash -lc ' \
+      helm repo add kong https://charts.konghq.com || true; \
+      helm repo update; \
+      helm upgrade --install kong kong/kong \
+        --namespace {{VKONG}} \
+        --skip-crds --reuse-values \
+        --set image.repository=public.ecr.aws/docker/library/kong \
+        --set image.tag="3.9.1" \
+        --set ingressController.installCRDs=false \
+        --set ingressController.enabled=true \
+        --set ingressController.gateway.enabled=true \
+        --set ingressController.ingressClass=kong \
+        --set deployment.userDefinedVolumes[0].name=stdout-log \
+        --set deployment.userDefinedVolumes[0].configMap.name=kong-plugin-stdout-log \
+        --set deployment.userDefinedVolumes[0].configMap.items[0].key=handler.lua \
+        --set deployment.userDefinedVolumes[0].configMap.items[0].path=kong/plugins/stdout-log/handler.lua \
+        --set deployment.userDefinedVolumes[0].configMap.items[1].key=schema.lua \
+        --set deployment.userDefinedVolumes[0].configMap.items[1].path=kong/plugins/stdout-log/schema.lua \
+        --set deployment.userDefinedVolumeMounts[0].name=stdout-log \
+        --set deployment.userDefinedVolumeMounts[0].mountPath=/opt/kong \
+        --set deployment.userDefinedVolumeMounts[0].readOnly=true \
+        --set-string env.plugins=bundled\\,stdout-log \
+        --set-string env.lua_package_path=/opt/kong/?.lua\;/opt/kong/?/init.lua\;\; \
+        --set env.database=off \
+        --set admin.enabled=false \
+        --set portal.enabled=false \
+        --set proxy.type=ClusterIP \
+        --wait \
+    ' > /dev/null
+
+    @just print-subitem "(5/6) Configure Kong"
+    @envsubst < manifests/kong-gateway-class.tmpl.yaml | \
+        kubectl --kubeconfig="vcluster/{{VNAME}}/.kubeconfig" apply -f - > /dev/null
+    @GATEWAY_NAMESPACE={{VKONG}} \
+        envsubst < manifests/kong-gateway.tmpl.yaml | \
+        kubectl --kubeconfig="vcluster/{{VNAME}}/.kubeconfig" apply -f - > /dev/null
+
+    @just print-subitem "(6/6) Port-forward Kong proxy"
+    @kubectl --kubeconfig="vcluster/{{VNAME}}/.kubeconfig" \
+        --namespace {{VKONG}} wait \
+        --for=condition=available deploy -l app.kubernetes.io/name=kong \
+        --timeout=240s > /dev/null
+    @kubectl --kubeconfig="vcluster/{{VNAME}}/.kubeconfig" \
+        --namespace {{VKONG}} port-forward svc/kong-kong-proxy {{VPORT}}:80 \
+        > "vcluster/{{VNAME}}/.kong.port-forward.log" 2>&1 &
+    
+
+vcluster-kong-ingres NAMESPACE BASE_PATH SERVICE_NAME SERVICE_PORT:
+    @NAMESPACE={{NAMESPACE}} \
+        BASE_PATH={{BASE_PATH}} \
+        SERVICE_NAME={{SERVICE_NAME}} \
+        SERVICE_PORT={{SERVICE_PORT}} \
+        GATEWAY_NAMESPACE={{VKONG}} \
+        envsubst < manifests/kong-http-route.tmpl.yaml | \
+        kubectl --kubeconfig="vcluster/{{VNAME}}/.kubeconfig" apply -f - > /dev/null
+
 VDASHBOARD := "vcluster-dashboard"
 EXPIRATION := "24h"
 
-vcluster-dashboard: 
+vcluster-dashboard: vcluster-kong
     @just print-seccion "Ephemeral Cluster Dashboard"
     @just print-item "Cluster" "{{VNAME}}"
 
@@ -115,18 +196,19 @@ vcluster-dashboard:
     @KUBECONFIG="vcluster/{{VNAME}}/.kubeconfig" bash -lc ' \
         helm repo add headlamp https://kubernetes-sigs.github.io/headlamp/ || true; \
         helm repo update; \
-        helm upgrade --install headlamp headlamp/headlamp -n {{VDASHBOARD}} \
+        helm upgrade --install {{VDASHBOARD}} headlamp/headlamp \
+          --namespace {{VDASHBOARD}} \
     ' > /dev/null
 
     @just print-subitem "(3/5) Generate Token ({{EXPIRATION}})"
-    @kubectl --kubeconfig="vcluster/{{VNAME}}/.kubeconfig" --namespace {{VDASHBOARD}} create serviceaccount headlamp-admin --dry-run=client -o yaml | \
+    @kubectl --kubeconfig="vcluster/{{VNAME}}/.kubeconfig" --namespace {{VDASHBOARD}} create serviceaccount {{VDASHBOARD}}-admin --dry-run=client -o yaml | \
         kubectl --kubeconfig="vcluster/{{VNAME}}/.kubeconfig" apply -f - > /dev/null
-    @kubectl --kubeconfig="vcluster/{{VNAME}}/.kubeconfig" create clusterrolebinding headlamp-admin-{{VNAME}} \
-        --serviceaccount={{VDASHBOARD}}:headlamp-admin --clusterrole=cluster-admin --dry-run=client -o yaml | \
+    @kubectl --kubeconfig="vcluster/{{VNAME}}/.kubeconfig" create clusterrolebinding {{VDASHBOARD}}-admin-{{VNAME}} \
+        --serviceaccount={{VDASHBOARD}}:{{VDASHBOARD}}-admin --clusterrole=cluster-admin --dry-run=client -o yaml | \
         kubectl --kubeconfig="vcluster/{{VNAME}}/.kubeconfig" apply -f - > /dev/null
     
     @just print-subitem "(4/5) Store Token (Local + Secret)"
-    @kubectl --kubeconfig="vcluster/{{VNAME}}/.kubeconfig" -n {{VDASHBOARD}} create token headlamp-admin --duration={{EXPIRATION}} > vcluster/{{VNAME}}/.dashboard.token.txt
+    @kubectl --kubeconfig="vcluster/{{VNAME}}/.kubeconfig" -n {{VDASHBOARD}} create token {{VDASHBOARD}}-admin --duration={{EXPIRATION}} > vcluster/{{VNAME}}/.dashboard.token.txt
     @kubectl --namespace vcluster-{{VNAME}} create secret generic vcluster-{{VNAME}}-dashboard-token \
         --from-literal=token="$(cat vcluster/{{VNAME}}/.dashboard.token.txt)" \
         --dry-run=client -o yaml | \
@@ -134,13 +216,25 @@ vcluster-dashboard:
 
     @just print-exec "Dashboard Token" "$(cat vcluster/{{VNAME}}/.dashboard.token.txt)"
 
-    @just print-subitem "(5/5) Port Forward"
-    @kubectl --kubeconfig="vcluster/{{VNAME}}/.kubeconfig" --namespace {{VDASHBOARD}} wait --for=condition=available deploy/headlamp --timeout=120s
-    @KUBECONFIG="vcluster/{{VNAME}}/.kubeconfig" nohup kubectl --namespace {{VDASHBOARD}} \
-        port-forward svc/headlamp {{VPORT}}:80 > "vcluster/{{VNAME}}/.dashboard.port-forward.log" 2>&1 &
+    @just print-subitem "(5/5) Connect Through Kong Proxy"
+    @kubectl --kubeconfig="vcluster/{{VNAME}}/.kubeconfig" \
+        --namespace {{VDASHBOARD}} wait \
+        --for=condition=available deploy/{{VDASHBOARD}}-headlamp \
+        --timeout=120s > /dev/null
+    @just vcluster-kong-ingres {{VDASHBOARD}} /dashboard {{VDASHBOARD}}-headlamp 80
     
-    @just print-exec "Execute {{VNAME}} Dashboard" "http://localhost:{{VPORT}}"
+    @just print-exec "Execute {{VNAME}} Dashboard" "http://localhost:{{VPORT}}/dashboard"
+
+    @just print-subitem "(5/5) Port Forward"
+    @kubectl --kubeconfig="vcluster/{{VNAME}}/.kubeconfig" \
+        --namespace {{VDASHBOARD}} port-forward svc/{{VDASHBOARD}}-headlamp 3003:80 \
+        > "vcluster/{{VNAME}}/.dashboard.port-forward.log" 2>&1 &
+    
+    @just print-exec "Execute {{VNAME}} Dashboard" "http://localhost:3003"
+
+
+vcluster-full: vcluster-create vcluster-connect vcluster-kong vcluster-dashboard 
 
 
 # ------------------------------------------------------------------------ all -
-all: cluster-create vcluster-create vcluster-connect vcluster-dashboard
+all: cluster-create vcluster-full

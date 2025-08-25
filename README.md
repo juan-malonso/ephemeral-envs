@@ -3,25 +3,29 @@
 Spin up a local **kind** host, an isolated **vcluster**, and the **Headlamp** dashboard with a ready-to-use token and port-forward. Built for fast demos and repeatable dev environments.
 
 ```mermaid
-architecture-beta
-    group root(cloud)[Root Cluster]
-    service rootKong(server)[Kong] in root
+flowchart LR
+    root-kong[Kong]
 
-    group vCluster1(server)[Ephemeral Cluster 1] in root
-    service vCluster1Kong(server)[Kong] in vCluster1
-    service vCluster1Argo(server)[Argo] in vCluster1
-    service vCluster1Platform(server)[Platform] in vCluster1
-    vCluster1Kong:L -- R:vCluster1Platform
-    vCluster1Kong:T -- R:vCluster1Argo
+    root-kong---cluster1-kong
+    root-kong---cluster2-kong
 
-    group vCluster2(server)[Ephemeral Cluster 2] in root
-    service vCluster2Kong(server)[Kong] in vCluster2
-    service vCluster2Argo(server)[Argo] in vCluster2
-    service vCluster2Platform(server)[Platform] in vCluster2
-    vCluster2Kong:R -- L:vCluster2Platform
-    vCluster2Kong:T -- L:vCluster2Argo
-    rootKong:L -- R:vCluster1Kong
-    rootKong:R -- L:vCluster2Kong
+    subgraph cluster1[Ephemeral Cluster 1]
+        cluster1-kong[Kong]
+        cluster1-argo[Argo]
+        cluster1-view[View]
+
+        cluster1-kong---cluster1-view
+        cluster1-kong---cluster1-argo
+    end
+
+    subgraph cluster2[Ephemeral Cluster 2]
+        cluster2-kong[Kong]
+        cluster2-argo[Argo]
+        cluster2-view[View]
+
+        cluster2-kong---cluster2-view
+        cluster2-kong---cluster2-argo
+    end
 ```
 
 ## How to deploy

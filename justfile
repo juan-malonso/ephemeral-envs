@@ -19,12 +19,18 @@ cluster-connect:
     @cd {{EPHEMERAL_FOLDER}} && just cluster-connect
 
 # ------------------------------------------------------------------- vcluster -
-vcluster-create:
+vcluster-full:
+    @cd {{EPHEMERAL_FOLDER}} && just vcluster-full
+
+vcluster-delete:
+    @cd {{EPHEMERAL_FOLDER}} && just vcluster-delete
+
+vcluster-test:
     #!/usr/bin/env bash
     cd {{EPHEMERAL_FOLDER}}
 
-    VNAME="first-deploy" VPORT="4000" just vcluster-create vcluster-connect vcluster-dashboard
-    VNAME="second-deploy" VPORT="5000" just vcluster-create vcluster-connect vcluster-dashboard
+    VNAME="first-deploy" VPORT="4000" just vcluster-full
+    VNAME="second-deploy" VPORT="5000" just vcluster-full
 
 # ------------------------------------------------------------------------ all -
-all: cluster-create vcluster-create
+all: cluster-create vcluster-test
