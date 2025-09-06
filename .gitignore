@@ -1,3 +1,6 @@
 
 # ephemeral clusters deployed
-vcluster/
+vc-*/
+previous.config
+
+.kubeconfig

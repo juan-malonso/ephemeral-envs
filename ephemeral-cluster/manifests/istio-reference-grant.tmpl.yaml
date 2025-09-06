@@ -1,0 +1,14 @@
+apiVersion: gateway.networking.k8s.io/v1beta1
+kind: ReferenceGrant
+metadata:
+  name: istio-to-${SERVICE_NAME}
+  namespace: ${NAMESPACE}
+spec:
+  from:
+    - group: gateway.networking.k8s.io
+      kind: HTTPRoute
+      namespace: ${GATEWAY_NAMESPACE}
+  to:
+    - group: ""
+      kind: Service
+      name: ${SERVICE_NAME}

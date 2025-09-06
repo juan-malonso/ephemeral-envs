@@ -1,13 +1,11 @@
 apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
 metadata:
-  name: vcluster-dashboard
-  namespace: ${NAMESPACE}
-  annotations:
-    konghq.com/strip-path: "true"
+  name: ${NAMESPACE}
+  namespace: ${GATEWAY_NAMESPACE}
 spec:
   parentRefs:
-    - name: kong
+    - name: istio-ingress
       namespace: ${GATEWAY_NAMESPACE}
   rules:
     - matches:
@@ -17,3 +15,4 @@ spec:
       backendRefs:
         - name: ${SERVICE_NAME}
           port: ${SERVICE_PORT}
+          namespace: ${NAMESPACE}
