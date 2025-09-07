@@ -59,7 +59,7 @@ cluster-create:
     just print-seccion "Cluster Create"
     just print-item "Cluster" "vc-{{HOST}}"
 
-    cp ~/.kube/config {{KUBECONFIG}}
+    cp -n ~/.kube/config {{KUBECONFIG}}
 
     just print-subitem "(1/1) Creating Cluster" 
     kind get clusters | grep -qx "{{HOST}}" || kind create cluster --name "{{HOST}}" --wait 120s  > /dev/null 2>&1
@@ -78,7 +78,7 @@ cluster-delete:
 
     just print-subitem "(2/2) Cleanup"
     rm -rf vc-{{HOST}}
-    cp {{KUBECONFIG}} ~/.kube/config
+    cp {{KUBECONFIG}} ~/.kube/config > /dev/null | true
 
 # - connect ---------------------------------------------------------------------
 
@@ -277,7 +277,8 @@ argo-create CLUSTER PATH:
         --set server.extraArgs[1]={{PATH}} \
         --set server.extraArgs[2]=--rootpath \
         --set server.extraArgs[3]={{PATH}} \
-        --set server.insecure=true \
+        --set server.extraArgs[4]=--insecure \
+        --set server.extraArgs[5]=--disable-auth \
         > /dev/null
 
     just print-subitem "(temp) Port-forward Argo"
@@ -288,10 +289,9 @@ argo-create CLUSTER PATH:
         > "{{CLUSTER}}/.argocd.port-forward.log" 2>&1 &
 
     just print-subitem "(3/3) Acceso rápido"
-    just print-exec "Login URL:" "http://localhost:3003{{PATH}}"
-    just print-exec "Password inicial:" $(kubectl --namespace $ANAME get secret argocd-initial-admin-secret -o jsonpath='{.data.password}' | base64 -d)
 
-    just istio-ingress {{CLUSTER}} $ANAME "/argo" "argocd-server" "443"
+    just istio-ingress {{CLUSTER}} $ANAME "{{PATH}}" "argo-cd-argocd-server" "80"
+    just print-exec "ArgoCD:" "http://localhost:{{VPORT}}{{PATH}}"
 
 
 

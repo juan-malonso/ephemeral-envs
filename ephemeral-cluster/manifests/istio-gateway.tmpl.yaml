@@ -1,14 +1,16 @@
-apiVersion: gateway.networking.k8s.io/v1
+apiVersion: networking.istio.io/v1
 kind: Gateway
 metadata:
-  name: vcluster-istio
+  name: istio-gateway
   namespace: ${GATEWAY_NAMESPACE}
 spec:
-  gatewayClassName: istio
-  listeners:
-    - name: http
-      protocol: HTTP
-      port: 80
-      allowedRoutes:
-        namespaces:
-          from: All
+  selector:
+    app: istio-gateway
+    istio: gateway
+  servers:
+    - hosts:
+        - "*"
+      port:
+        name: http2
+        number: 80
+        protocol: HTTP
